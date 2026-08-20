@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10x10 Decadoku - Audio & Timer Edition</title>
+    <style>
+        :root {
+            --bg: #f1f5f9;
+            --block-dark: #1a1a1a;
+            --primary: #3b82f6;
+            --victory: #10b981;
+            --selected: #fbbf24;
+            --error: #ef4444;
+        }
+
+        body { font-family: system-ui, sans-serif; background: var(--bg); display: flex; flex-direction: column; align-items: center; padding: 10px; overflow: hidden; }
+
+        .stats { display: flex; justify-content: space-between; width: 480px; margin-bottom: 10px; font-weight: bold; font-size: 1.2rem; }
+        #timer-display { background: #000; color: #0f0; padding: 4px 12px; border-radius: 5px; font-family: monospace; }
+
+        #grid { 
+            display: grid; grid-template-columns: repeat(10, 48px); grid-template-rows: repeat(10, 48px);
+            border: 4px solid #000; background: #fff; user-select: none; box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+
+        .cell {
+            width: 48px; height: 48px; border: 0.5px solid #cbd5e1;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; position: relative; font-size: 22px; box-sizing: border-box;
+        }
+
+        .cell:nth-child(10n+5) { border-right: 4px solid #000; }
+        .b-bottom { border-bottom: 4px solid #000 !important; }
+
+        .block-light { background-color: #fff; color: #000; }
+        .block-dark { background-color: var(--block-dark); color: #fff; }
+        .cell.fixed { font-weight: 900; }
+        .block-dark.fixed { color: #00f2ff; }
+
+        .cell.selected { background: var(--selected) !important; color: #000 !important; outline: 3px solid #000; z-index: 10; }
+        .cell.match { background: rgba(59, 130, 246, 0.4); }
+        .cell.error { background: var(--error) !important; color: #fff !important; }
+
+        .notes-grid {
+            position: absolute; width: 100%; height: 100%;
+            display: grid; grid-template-columns: repeat(5, 1fr);
+            pointer-events: none; padding: 2px; box-sizing: border-box;
+        }
+        .note { font-size: 9px; visibility: hidden; text-align: center; font-weight: bold; color: #666; }
+        .block-dark .note { color: #aaa; }
+        .note.visible { visibility: visible; }
+
+        .numpad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 15px; width: 100%; max-width: 480px; }
+        .num-btn { 
+            padding: 15px; font-size: 20px; font-weight: bold; background: white; 
+            border: 2px solid #000; border-radius: 8px; cursor: pointer; transition: 0.1s;
+        }
+        .num-btn.done { opacity: 0.1; pointer-events: none; }
+        
+        .actions { margin-top: 15px; display: flex; gap: 10px; }
+        .btn { padding: 12px 20px; border-radius: 8px; border: 2px solid #000; font-weight: bold; cursor: pointer; }
+        .btn-note.active { background: #16a34a; color: white; }
+
+        #toaster {
+            position: fixed; bottom: 20px; background: #ef4444; color: white;
+            padding: 15px 40px; border-radius: 50px; font-weight: bold; font-size: 1.5rem;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.4); transform: translateY(150px);
+            transition: transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28); z-index: 1000;
+        }
+        #toaster.show { transform: translateY(0); }
+
+        #victory-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.95); color: white;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 2000; text-align: center;
+        }
+        .bounce { font-size: 5rem; animation: bounce 1s infinite; }
+        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-30px); } }
+    </style>
+</head>
+<body>
+
+    <div id="victory-screen">
+        <div class="bounce">🌟</div>
+        <h1 style="font-size: 4rem; color: #10b981; margin: 10px;">LODI!</h1>
+        <p id="final-time" style="font-size: 2rem;"></p>
+        <button class="btn" onclick="location.reload()" style="background:#10b981; color:white; font-size: 1.5rem;">Try Again</button>
+    </div>
+
+    <div id="toaster">bobo mali!</div>
+
+    <div class="stats">
+        <span>Decadoku 10x10</span>
+        <span id="timer-display">00:00</span>
+    </div>
+
+    <div id="grid"></div>
+
+    <div class="actions">
+        <button id="noteToggle" class="btn btn-note" onclick="toggleNoteMode()">Notes: OFF</button>
+        <button class="btn" onclick="inputNumber(null)">Erase</button>
+        <button class="btn" style="background:#000; color:#fff" onclick="resetGame()">New Puzzle</button>
+    </div>
+
+    <div class="numpad" id="numpad"></div>
+
+    <script>
+        const SIZE = 10, BR = 2, BC = 5;
+        let solution = [], noteMode = false, selectedCell = null;
+        let timerSeconds = 0, timerInterval = null;
+
+        // Custom Audio Loading
+        const wrongAudio = new Audio('bobo_mali.mp3');
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            timerSeconds = 0;
+            timerInterval = setInterval(() => {
+                timerSeconds++;
+                const mins = Math.floor(timerSeconds / 60).toString().padStart(2, '0');
+                const secs = (timerSeconds % 60).toString().padStart(2, '0');
+                document.getElementById('timer-display').innerText = `${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function triggerToaster() {
+            // Play your custom "Bobo Mali" audio
+            wrongAudio.currentTime = 0; 
+            wrongAudio.play().catch(e => console.log("Audio failed. Make sure bobo_mali.mp3 is in the folder."));
+            
+            const toaster = document.getElementById('toaster');
+            toaster.classList.add('show');
+            setTimeout(() => toaster.classList.remove('show'), 1500);
+        }
+
+        function createUI() {
+            const grid = document.getElementById('grid');
+            grid.innerHTML = '';
+            let board = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
+            solveSudoku(board);
+            solution = board.map(row => [...row]);
+
+            for (let r = 0; r < SIZE; r++) {
+                for (let c = 0; c < SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    const isDark = (Math.floor(r/BR) + Math.floor(c/BC)) % 2 !== 0;
+                    cell.classList.add(isDark ? 'block-dark' : 'block-light');
+                    if (r === 1 || r === 3 || r === 5 || r === 7) cell.classList.add('b-bottom');
+
+                    cell.dataset.row = r; cell.dataset.col = c;
+                    cell.dataset.notes = "[]";
+
+                    const vText = document.createElement('span');
+                    vText.className = 'val-text';
+                    cell.appendChild(vText);
+
+                    const nGrid = document.createElement('div');
+                    nGrid.className = 'notes-grid';
+                    for(let i=1; i<=10; i++){
+                        const n = document.createElement('div');
+                        n.className = `note n-${i}`; n.innerText = i;
+                        nGrid.appendChild(n);
+                    }
+                    cell.appendChild(nGrid);
+
+                    if (Math.random() > 0.45) {
+                        vText.innerText = board[r][c];
+                        cell.classList.add('fixed');
+                    }
+                    cell.onclick = () => select(cell);
+                    grid.appendChild(cell);
+                }
+            }
+            updateNumpadStatus();
+            startTimer();
+        }
+
+        function select(cell) {
+            document.querySelectorAll('.cell').forEach(c => c.classList.remove('selected', 'match'));
+            selectedCell = cell;
+            cell.classList.add('selected');
+            const txt = cell.querySelector('.val-text').innerText;
+            if (txt) document.querySelectorAll('.cell').forEach(c => {
+                if (c.querySelector('.val-text').innerText === txt) c.classList.add('match');
+            });
+        }
+
+        function inputNumber(num) {
+            if (!selectedCell || selectedCell.classList.contains('fixed')) return;
+            const vText = selectedCell.querySelector('.val-text');
+
+            if (num === null) {
+                vText.innerText = "";
+                selectedCell.dataset.notes = "[]";
+                selectedCell.classList.remove('error');
+            } else if (noteMode) {
+                if (vText.innerText) return;
+                let notes = JSON.parse(selectedCell.dataset.notes);
+                notes = notes.includes(num) ? notes.filter(n => n !== num) : [...notes, num];
+                selectedCell.dataset.notes = JSON.stringify(notes);
+            } else {
+                vText.innerText = num;
+                selectedCell.dataset.notes = "[]";
+                const isCorrect = num == solution[selectedCell.dataset.row][selectedCell.dataset.col];
+                if (!isCorrect) {
+                    selectedCell.classList.add('error');
+                    triggerToaster();
+                } else {
+                    selectedCell.classList.remove('error');
+                }
+            }
+            updateNotesUI(selectedCell);
+            updateNumpadStatus();
+            select(selectedCell);
+            checkVictory();
+        }
+
+        function updateNumpadStatus() {
+            const counts = {};
+            document.querySelectorAll('.cell').forEach(c => {
+                const val = c.querySelector('.val-text').innerText;
+                const r = c.dataset.row, col = c.dataset.col;
+                if (val && parseInt(val) === solution[r][col]) counts[val] = (counts[val] || 0) + 1;
+            });
+            for(let i=1; i<=10; i++) {
+                const btn = document.getElementById(`btn-${i}`);
+                if (btn) btn.classList.toggle('done', counts[i] === 10);
+            }
+        }
+
+        function updateNotesUI(cell) {
+            const notes = JSON.parse(cell.dataset.notes);
+            cell.querySelectorAll('.note').forEach(n => n.classList.remove('visible'));
+            notes.forEach(n => cell.querySelector(`.n-${n}`).classList.add('visible'));
+        }
+
+        function toggleNoteMode() {
+            noteMode = !noteMode;
+            const btn = document.getElementById('noteToggle');
+            btn.innerText = `Notes: ${noteMode ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('active', noteMode);
+        }
+
+        function checkVictory() {
+            const allCells = document.querySelectorAll('.cell');
+            const win = [...allCells].every(c => {
+                const v = c.querySelector('.val-text').innerText;
+                return v && v == solution[c.dataset.row][c.dataset.col];
+            });
+            if (win) {
+                clearInterval(timerInterval);
+                document.getElementById('final-time').innerText = "Time: " + document.getElementById('timer-display').innerText;
+                document.getElementById('victory-screen').style.display = 'flex';
+            }
+        }
+
+        function solveSudoku(b) {
+            for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) {
+                if (b[r][c] == 0) {
+                    let nums = [1,2,3,4,5,6,7,8,9,10].sort(() => Math.random()-0.5);
+                    for (let n of nums) {
+                        if (isValid(b, r, c, n)) {
+                            b[r][c] = n;
+                            if (solveSudoku(b)) return true;
+                            b[r][c] = 0;
+                        }
+                    } return false;
+                }
+            } return true;
+        }
+
+        function isValid(b, r, c, n) {
+            for (let i = 0; i < 10; i++) if (b[r][i] == n || b[i][c] == n) return false;
+            let sr = Math.floor(r/2)*2, sc = Math.floor(c/5)*5;
+            for (let i = 0; i < 2; i++) for (let j = 0; j < 5; j++) if (b[sr+i][sc+j] == n) return false;
+            return true;
+        }
+
+        const pad = document.getElementById('numpad');
+        for(let i=1; i<=10; i++) {
+            const b = document.createElement('button');
+            b.className = 'num-btn'; b.innerText = i; b.id = `btn-${i}`;
+            b.onclick = () => {
+                inputNumber(i);
+            }
+            pad.appendChild(b);
+        }
+
+        function resetGame() { selectedCell = null; createUI(); }
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.key >= '1' && e.key <= '9') inputNumber(parseInt(e.key));
+            if (e.key === '0') inputNumber(10);
+            if (e.key.toLowerCase() === 'n') toggleNoteMode();
+            if (e.key === 'Backspace' || e.key === 'Delete') inputNumber(null);
+        });
+
+        createUI();
+    </script>
+</body>
+</html>
